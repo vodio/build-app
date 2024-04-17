@@ -1,0 +1,53 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repo to compile"
+        required: true
+
+jobs:
+  run-procursus:
+    name: Run ${{ github.event.inputs.rule }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: "${{ github.event.inputs.repo }}"
+
+      - name: Extract Scheme Name
+        id: extract_scheme
+        run: |
+          project_file=$(find . -name '*.xcodeproj' | head -n 1)
+          scheme=$(basename "$project_file" .xcodeproj)
+          echo "::set-output name=scheme::$scheme"
+
+      - name: Build IPA
+        run: |
+          scheme=${{ steps.extract_scheme.outputs.scheme }}
+          xcodebuild -project "${scheme}.xcodeproj" -scheme "$scheme" -configuration Release -arch arm64 -sdk iphoneos -derivedDataPath /tmp/build-ipa CODE_SIGNING_ALLOWED=NO DSTROOT=/tmp/build-ipa/install
+
+      - name: Prepare IPA
+        run: |
+          project_name=$(basename "${scheme}.xcodeproj" .xcodeproj)
+          build_date=$(date +'%Y%m%d')
+          mkdir -p /tmp/build-ipa/Payload
+          cp -R /tmp/build-ipa/Build/Products/Release-iphoneos/*.app /tmp/build-ipa/Payload
+          cd /tmp/build-ipa
+          zip -r "${project_name}_${build_date}.ipa" Payload
+          mkdir -p out
+          mv "${project_name}_${build_date}.ipa" out
+
+      - name: Upload ipa
+        uses: wangyucode/sftp-upload-action@v1.4.8
+        with:
+          host: ${{ secrets.FTP_HOST }}
+          port: ${{ secrets.FTP_PORT }}
+          username: vodio
+          password: ${{ secrets.FTP_PASS }}
+          forceUpload: true
+          dryRun: false
+          localDir: '/tmp/build-ipa/out/'
+          remoteDir: '/uploads/build-app/${{ github.run_number }}'
